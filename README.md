@@ -26,7 +26,7 @@ The following diagram illustrates the attack flow, from the initial limited user
 <p align="center">
   <img src=".assets/Architecture diagram.png" alt="Architecture Diagram" width="800"/>
   <br>
-  <b>Figure 1: High-Level Attack Architecture and Data Flow</b>
+  <b>Figure 1: High-Level Attack Architecture. The attack leverages a public-facing Code Interpreter to bridge the gap between a low-privilege external user and a high-privilege internal IAM role.</b>
 </p>
 
 ---
@@ -40,13 +40,13 @@ Starting as a compromised IAM user with highly restricted permissions (primarily
 <p align="center">
   <img src=".assets/Privilege Boundary Proof.png" alt="Privilege Boundary Proof" width="800"/>
   <br>
-  <b>Figure 2: Verifying execution context and identity before data access.</b>
+  <b>Figure 2: Verifying execution context and identity. The initial `get-caller-identity` check confirms the initial execution context before escalation.</b>
 </p>
 
 <p align="center">
   <img src=".assets/Role Enumeration.png" alt="Role Enumeration" width="800"/>
   <br>
-  <b>Figure 3: Enumerating IAM roles to identify potential targets related to Bedrock execution.</b>
+  <b>Figure 3: Role Enumeration. Identifying the target execution role by listing roles associated with Bedrock AgentCore execution contexts.</b>
 </p>
 
 ### Phase 2: Identifying the Vulnerability (Overprivileged Policy)
@@ -58,7 +58,7 @@ The policy granted actions like `s3:GetObject` and `s3:ListBucket` on a sensitiv
 <p align="center">
   <img src=".assets/Overprivileged IAM Policy.png" alt="Overprivileged IAM Policy" width="800"/>
   <br>
-  <b>Figure 4: The vulnerable IAM policy attached to the Code Interpreter execution role.</b>
+  <b>Figure 4: Vulnerable IAM Policy. Note the wildcards allowing `s3:ListBucket` and `s3:GetObject` on a sensitive customer data S3 bucket, which enables the data exfiltration.</b>
 </p>
 
 ### Phase 3: Weaponization (Creating the Rogue Interpreter)
@@ -72,7 +72,7 @@ To exploit this role, I utilized my limited permissions to create a **custom Bed
 <p align="center">
   <img src=".assets/Create the custom code interpreter.png" alt="Create the custom code interpreter" width="800"/>
   <br>
-  <b>Figure 5: Configuring the custom Code Interpreter with the target role.</b>
+  <b>Figure 5: Weaponization Configuration. Manually binding the target high-privilege role to a new, public-facing interpreter instance to create an exploit primitive.</b>
 </p>
 
 ### Phase 4: Execution & Privilege Escalation
@@ -84,7 +84,7 @@ By executing `aws sts get-caller-identity` inside the interpreter runtime, I ver
 <p align="center">
   <img src=".assets/Code interpreter exploit script.png" alt="Code interpreter exploit script" width="800"/>
   <br>
-  <b>Figure 6: The Python exploit script used to directly inject shell commands.</b>
+  <b>Figure 6: The Exploit Script. This Python code bypasses the agent layer to inject raw shell commands directly into the interpreter runtime via `boto3`.</b>
 </p>
 
 ### Phase 5: Lateral Movement & Data Discovery
@@ -97,23 +97,23 @@ Having successfully assumed the high-privilege role, I used the exploit script t
 <p align="center">
   <img src=".assets/List bucket contents.png" alt="List bucket contents" width="800"/>
   <br>
-  <b>Figure 7: Successful enumeration of S3 buckets using the assumed role.</b>
+  <b>Figure 7: Lateral Movement. Using the stolen session to enumerate S3 buckets, revealing infrastructure invisible to the initial user.</b>
 </p>
 
 <p align="center">
   <img src=".assets/S3 access gained.png" alt="S3 access gained" width="800"/>
   <br>
-  <b>Figure 8: S3 Access Verification. This validates that the session is authenticated as the Interpreter execution role and authorizes the specific `ListBucket` action against the restricted resource.</b>
+  <b>Figure 8: S3 Access Verification. Validating that the `ListBucket` action succeeds against the restricted resource, confirming the permissions bypass is active.</b>
 </p>
 
 ### Phase 6: Exfiltration (Impact)
 
-The final step was proving access to sensitive data. A recursive listing of the target bucket revealed highly sensitive files, including customer profiles and transaction logs, which were completely inaccessible to the initial user.
+The final step was proving access to sensitive data. A recursive listing of the target bucket revealed highly sensitive files, including customer profile and transaction datasets, which were completely inaccessible to the initial user.
 
 <p align="center">
   <img src=".assets/Sensitive file listing.png" alt="Sensitive file listing" width="800"/>
   <br>
-  <b>Figure 9: Enumeration of sensitive customer datasets, illustrating the critical impact of the breach.</b>
+  <b>Figure 9: Data Exfiltration. The final impact proof: listing sensitive customer profile and transaction datasets that constitute a critical data breach.</b>
 </p>
 
 ---
@@ -144,3 +144,11 @@ To prevent this type of privilege escalation, organizations must apply rigorous 
 
 4.  **Monitor `invoke_code_interpreter`:**
     * Monitor CloudTrail for direct API calls to `InvokeCodeInterpreter`. Legitimate workflows typically go through an Agent (`InvokeAgent`); direct interpreter usage may indicate an exploit attempt.
+
+---
+
+## Conclusion
+
+This project highlights a fundamental shift in cloud security: **AI Agents are now part of the identity perimeter.**
+
+By demonstrating how a misconfigured Code Interpreter can be weaponized as a "serverless bastion host," I showed that securing GenAI is not just about prompt engineering or model safety—it is an infrastructure security challenge. The successful escalation from a limited user to full data access underscores the necessity of treating AI runtimes with the same zero-trust rigor as any other compute environment. Organizations must move beyond implicit trust and enforce strict network boundaries and IAM scoping to safely adopt these powerful capabilities.
