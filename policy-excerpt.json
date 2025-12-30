@@ -1,0 +1,23 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowListAllBuckets",
+      "Effect": "Allow",
+      "Action": "s3:ListAllMyBuckets",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowBucketList",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::bedrock-agentcore-customer-data-<ACCOUNT_ID>"
+    },
+    {
+      "Sid": "AllowObjectRead",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::bedrock-agentcore-customer-data-<ACCOUNT_ID>/*"
+    }
+  ]
+}
