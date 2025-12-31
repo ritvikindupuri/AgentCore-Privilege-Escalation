@@ -26,7 +26,9 @@ The following diagram illustrates the attack flow, from the initial limited user
 <p align="center">
   <img src=".assets/Architecture diagram.png" alt="Architecture Diagram" width="800"/>
   <br>
-  <b>Figure 1: High-Level Attack Architecture. The attack leverages a public-facing Code Interpreter to bridge the gap between a low-privilege external user and a high-privilege internal IAM role.</b>
+  <b>Figure 1: High-Level Attack Architecture</b>
+  <br><br>
+  This diagram visualizes the privilege escalation path. The attack leverages a public-facing Bedrock Code Interpreter to bridge the gap between a low-privilege external user (who has no direct S3 access) and a high-privilege internal IAM Execution Role (which has full S3 read access). The Code Interpreter acts as a serverless proxy, executing commands on behalf of the attacker.
 </p>
 
 ---
@@ -40,70 +42,73 @@ Starting as a compromised IAM user with highly restricted permissions (primarily
 <p align="center">
   <img src=".assets/Privilege Boundary Proof.png" alt="Privilege Boundary Proof" width="800"/>
   <br>
-  <b>Figure 2: Verifying execution context and identity. The initial `get-caller-identity` check confirms the initial execution context before escalation.</b>
+  <b>Figure 2: Execution Context Verification</b>
+  <br><br>
+  This console output establishes the baseline for the exploit. By running `get-caller-identity`, I confirmed that my initial session was restricted to the compromised user context. Attempting to list S3 buckets at this stage resulted in an "Access Denied" error, proving that any subsequent data access must be the result of a successful privilege escalation.
 </p>
 
 <p align="center">
   <img src=".assets/Role Enumeration.png" alt="Role Enumeration" width="800"/>
   <br>
-  <b>Figure 3: Role Enumeration. Identifying the target execution role by listing roles associated with Bedrock AgentCore execution contexts.</b>
+  <b>Figure 3: Role Enumeration</b>
+  <br><br>
+  Using the AWS CLI, I filtered the available IAM roles to identify potential targets. The output reveals the `AgentCodeInterpreterRole`, a role specifically designed to be assumed by Bedrock resources. Discovering this role provided the specific target ARN needed to configure the rogue interpreter in the next phase.
 </p>
 
 ### Phase 2: Identifying the Vulnerability (Overprivileged Policy)
 
 Analysis of the discovered roles revealed a critical misconfiguration. One specific execution role, intended for a code interpreter, possessed an IAM policy with excessively broad read permissions to a production data S3 bucket.
 
-The policy granted actions like `s3:GetObject` and `s3:ListBucket` on a sensitive resource without adequate scoping. This is the core vulnerability: giving a remote execution environment permissions it does not strictly need.
-
 <p align="center">
   <img src=".assets/Overprivileged IAM Policy.png" alt="Overprivileged IAM Policy" width="800"/>
   <br>
-  <b>Figure 4: Vulnerable IAM Policy. Note the wildcards allowing `s3:ListBucket` and `s3:GetObject` on a sensitive customer data S3 bucket, which enables the data exfiltration.</b>
+  <b>Figure 4: Vulnerable IAM Policy Configuration</b>
+  <br><br>
+  This JSON policy document highlights the root cause of the vulnerability. The policy grants `s3:ListBucket` and `s3:GetObject` permissions on the sensitive `customer-data` bucket. Critically, these permissions are not scoped to a specific prefix (e.g., a "safe" folder), allowing any entity assuming this role to read the entire contents of the bucket.
 </p>
 
 ### Phase 3: Weaponization (Creating the Rogue Interpreter)
 
 To exploit this role, I utilized my limited permissions to create a **custom Bedrock AgentCore Code Interpreter** via the CLI. This bypassed the standard Agent creation flows and allowed me to bind the resource directly to the target execution role.
 
-**Crucial Configuration Details:**
-1.  **Execution Role:** Bound the overprivileged role found in Phase 2.
-2.  **Network Mode:** Configured as **PUBLIC**, enabling direct API access without VPC restrictions.
-
 <p align="center">
   <img src=".assets/Create the custom code interpreter.png" alt="Create the custom code interpreter" width="800"/>
   <br>
-  <b>Figure 5: Weaponization Configuration. Manually binding the target high-privilege role to a new, public-facing interpreter instance to create an exploit primitive.</b>
+  <b>Figure 5: Weaponization and Interpreter Creation</b>
+  <br><br>
+  This screenshot shows the `aws bedrock-agentcore-control` command used to instantiate the malicious resource. Key configuration parameters include setting `networkMode: PUBLIC`, which exposes the interpreter to direct API calls over the internet, and binding it to the overprivileged `AgentCodeInterpreterRole` identified in Phase 1.
 </p>
 
 ### Phase 4: Execution & Privilege Escalation
 
 With the interpreter active, I used a custom Python script to directly call the `invoke_code_interpreter` API. Instead of using a prompt to ask an LLM to write code, I passed raw Python commands that executed system shell instructions.
 
-By executing `aws sts get-caller-identity` inside the interpreter runtime, I verified that the code was running under the assumed role of the Interpreter, confirming the privilege bypass.
-
 <p align="center">
   <img src=".assets/Code interpreter exploit script.png" alt="Code interpreter exploit script" width="800"/>
   <br>
-  <b>Figure 6: The Exploit Script. This Python code bypasses the agent layer to inject raw shell commands directly into the interpreter runtime via `boto3`.</b>
+  <b>Figure 6: The Exploit Script</b>
+  <br><br>
+  This custom Python script uses the `boto3` library to bypass the conversational agent layer entirely. It constructs a payload containing raw Python code (`os.popen`) that executes arbitrary shell commands inside the remote interpreter runtime. This allows me to use the interpreter as a "serverless shell" running with the full privileges of the attached IAM role.
 </p>
 
 ### Phase 5: Lateral Movement & Data Discovery
 
 Having successfully assumed the high-privilege role, I used the exploit script to explore the S3 environment. The interpreter's role allowed me to bypass the restrictions on my original user account.
 
-1.  **Bucket Discovery:** I executed `aws s3 ls` to list all buckets in the account.
-2.  **Content Enumeration:** I targeted the sensitive bucket identified in the IAM policy.
-
 <p align="center">
   <img src=".assets/List bucket contents.png" alt="List bucket contents" width="800"/>
   <br>
-  <b>Figure 7: Lateral Movement. Using the stolen session to enumerate S3 buckets, revealing infrastructure invisible to the initial user.</b>
+  <b>Figure 7: Lateral Movement & Enumeration</b>
+  <br><br>
+  Using the stolen session, I executed `aws s3 ls` to enumerate all buckets in the account. This step reveals infrastructure that was completely invisible to the initial limited user, effectively mapping the attack surface for further data exfiltration.
 </p>
 
 <p align="center">
   <img src=".assets/S3 access gained.png" alt="S3 access gained" width="800"/>
   <br>
-  <b>Figure 8: S3 Access Verification. Validating that the `ListBucket` action succeeds against the restricted resource, confirming the permissions bypass is active.</b>
+  <b>Figure 8: S3 Access Verification</b>
+  <br><br>
+  This screenshot confirms the successful bypass of IAM boundaries. While the initial user was denied access, the Code Interpreter session successfully lists the contents of the restricted bucket. The output verifies that the session is authenticated as `AssumedRole/AgentCodeInterpreterRole` and authorized to perform the `ListBucket` action.
 </p>
 
 ### Phase 6: Exfiltration (Impact)
@@ -113,7 +118,9 @@ The final step was proving access to sensitive data. A recursive listing of the 
 <p align="center">
   <img src=".assets/Sensitive file listing.png" alt="Sensitive file listing" width="800"/>
   <br>
-  <b>Figure 9: Data Exfiltration. The final impact proof: listing sensitive customer profile and transaction datasets that constitute a critical data breach.</b>
+  <b>Figure 9: Data Exfiltration Impact</b>
+  <br><br>
+  The final proof of impact. By recursively listing the target bucket, I uncovered sensitive PII files (`customer_profiles.csv`, `financial_transactions.csv`). This demonstrates that the vulnerability leads to a critical data breach, allowing an attacker to exfiltrate proprietary and regulated data.
 </p>
 
 ---
