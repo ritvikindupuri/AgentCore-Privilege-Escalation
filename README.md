@@ -156,6 +156,12 @@ To prevent this type of privilege escalation, organizations must apply rigorous 
 
 ## Conclusion
 
-This project highlights a fundamental shift in cloud security: **AI Agents are now part of the identity perimeter.**
+This project reinforced an important takeaway: **AI runtimes must be treated like any other compute boundary. Prompt safety alone doesn’t protect against infrastructure-level misconfiguration.**
 
-By demonstrating how a misconfigured Code Interpreter can be weaponized as a "serverless bastion host," I showed that securing GenAI is not just about prompt engineering or model safety—it is an infrastructure security challenge. The successful escalation from a limited user to full data access underscores the necessity of treating AI runtimes with the same zero-trust rigor as any other compute environment. Organizations must move beyond implicit trust and enforce strict network boundaries and IAM scoping to safely adopt these powerful capabilities.
+While organizations often focus on preventing "jailbreaks" (getting the LLM to say bad things), the real danger lies in the runtime environment itself. If these misconfigurations were exploited in a production environment, the consequences would be severe:
+
+* **Massive Data Exfiltration:** An attacker could recursively sync sensitive S3 buckets containing PII, financial records, or intellectual property, leading to heavy regulatory fines (GDPR/CCPA) and reputational damage.
+* **Lateral Movement:** If the attached role had broader permissions (e.g., `secretsmanager:GetSecret` or `dynamodb:Scan`), the Code Interpreter would serve as a pivot point to compromise internal databases and retrieve production credentials.
+* **Denial of Service & Resource Hijacking:** The ability to execute arbitrary Python code allows attackers to hijack compute resources for tasks like crypto mining or to disrupt business logic flows that rely on these agents.
+
+Ultimately, securing GenAI requires a "Defense in Depth" approach—enforcing strict network isolation (VPC) and rigorous IAM scoping—rather than relying solely on the model's refusal to answer malicious prompts.
